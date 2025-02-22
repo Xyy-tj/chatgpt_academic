@@ -172,7 +172,16 @@ def handle_core_functionality(additional_fn, inputs, history, chatbot, username=
         # Get username from chatbot if not provided
         if username is None and hasattr(chatbot, 'get_cookies'):
             username = chatbot.get_cookies().get('user')
-
+        
+        # 如果仍然没有 username，则尝试从 HTTP 请求的 cookies 中获取
+        if username is None:
+            try:
+                from flask import request
+                username = request.cookies.get('user')
+                logger.info(f"Obtained username from request cookies: {username}")
+            except Exception as e:
+                logger.warning("Failed to retrieve username from request cookies: " + str(e))
+        
         if username:
             from user_manager import UserManager
             user_mgr = UserManager()

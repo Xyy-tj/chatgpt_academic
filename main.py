@@ -14,6 +14,9 @@ help_menu_description = \
 </br></br>如何临时更换API_KEY: 在输入区输入临时API_KEY后提交（网页刷新后失效）"""
 
 from loguru import logger
+
+
+
 def enable_log(PATH_LOGGING):
     from shared_utils.logging import setup_logging
     setup_logging(PATH_LOGGING)
@@ -166,7 +169,7 @@ def main():
             with gr.Row():
                 user_info = gr.Markdown("", elem_id="user_info")
                 quota_info = gr.Markdown("", elem_id="quota-info")
-                refresh_button = gr.Button("🔄", visible=True, size="sm")
+                refresh_button = gr.Button("🔄", visible=True, elem_id='refresh_button')
                 logout_btn = gr.Button("登出")  # 移除 scale 参数
             with gr_L1():
                 with gr_L2(scale=2, elem_id="gpt-chat"):
@@ -286,30 +289,47 @@ def main():
 
         # Login/Register logic
         def login(username, password):
+            logger.info(f'开始处理用户 {username} 的登录请求')
+            logger.debug(f'当前cookie状态: {cookies.value if hasattr(cookies, "value") else "No cookies"}')
+            
             if user_manager.verify_user(username, password):
                 user_info = user_manager.get_user_info(username)
                 info_text = f"用户: {username} | 已用额度: {user_info['quota_used']}/{user_info['quota_limit']}"
-                updated_cookies = dict(cookies.value)  
+
+                # 更新cookie
+                updated_cookies = dict(cookies.value) if hasattr(cookies, 'value') else {}
                 updated_cookies["user"] = username
+                updated_cookies["persistent"] = True
+                updated_cookies["expires"] = "7d"
+                logger.info(f'用户 {username} 登录成功，已设置cookie: {updated_cookies}')
+                
                 return [
                     gr.update(visible=False),  # login_row
                     gr.update(visible=True),   # main_interface
-                    {"username": username},     # user_state
-                    info_text,                 # user_info
-                    "",                        # login_msg
-                    updated_cookies            # cookies
+                    {"username": username},    # user_state
+                    info_text,                # user_info
+                    "",                       # login_msg
+                    updated_cookies,          # cookies
+                    gr.update(_js="persistent_cookie_init(web_cookie_cache, cookies)")
                 ]
             else:
-                updated_cookies = dict(cookies.value)
+                logger.warning(f'用户 {username} 登录失败，清除相关cookie')
+                updated_cookies = dict(cookies.value) if hasattr(cookies, 'value') else {}
                 if "user" in updated_cookies: 
                     del updated_cookies["user"]
+                if "persistent" in updated_cookies:
+                    del updated_cookies["persistent"]
+                if "expires" in updated_cookies:
+                    del updated_cookies["expires"]
+                logger.debug('清除后的cookie状态: %s', updated_cookies)
+                
                 return [
-                    gr.update(visible=True),       # login_row
-                    gr.update(visible=False),      # main_interface
-                    {"username": None},            # user_state
-                    "",                           # user_info
-                    "用户名或密码错误",            # login_msg
-                    updated_cookies                # cookies
+                    gr.update(visible=True),    # login_row
+                    gr.update(visible=False),   # main_interface
+                    {"username": None},         # user_state
+                    "",                        # user_info
+                    "登录失败",                # login_msg
+                    updated_cookies            # cookies
                 ]
 
         def refresh_user_info(user_state):
@@ -535,6 +555,42 @@ def main():
 
         # 生成当前浏览器窗口的uuid（刷新失效）
         app_block.load(assign_user_uuid, inputs=[cookies], outputs=[cookies])
+
+        # 检查持久化cookie并验证用户
+        def check_persistent_cookie(cookies):
+            try:
+                if cookies and "user" in cookies and cookies.get("persistent", False):
+                    username = cookies["user"]
+                    user_info = user_manager.get_user_info(username)
+                    if user_info:
+                        info_text = f"用户: {username} | 已用额度: {user_info['quota_used']}/{user_info['quota_limit']}"
+                        return [
+                            gr.update(visible=False),  # login_row
+                            gr.update(visible=True),   # main_interface
+                            {"username": username},    # user_state
+                            info_text,                # user_info
+                        ]
+                return [
+                    gr.update(visible=True),   # login_row
+                    gr.update(visible=False),  # main_interface
+                    {"username": None},        # user_state
+                    "",                       # user_info
+                ]
+            except Exception as e:
+                logger.error(f"Error checking persistent cookie: {e}")
+                return [
+                    gr.update(visible=True),   # login_row
+                    gr.update(visible=False),  # main_interface
+                    {"username": None},        # user_state
+                    "",                       # user_info
+                ]
+
+        # Add persistent cookie check on page load
+        app_block.load(
+            check_persistent_cookie,
+            inputs=[cookies],
+            outputs=[login_row, main_interface, user_state, user_info]
+        )
 
         # 初始化（前端）
         from shared_utils.cookie_manager import load_web_cookie_cache__fn_builder

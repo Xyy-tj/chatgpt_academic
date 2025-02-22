@@ -63,12 +63,14 @@ class UserManager:
 
     def verify_user(self, username, password):
         """Verify user credentials and optionally upgrade password hash"""
+        logger.info(f"开始验证用户 {username} 的登录请求")
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
         result = c.fetchone()
         
         if not result:
+            logger.warning(f"登录失败：用户 {username} 不存在")
             conn.close()
             return False
         
@@ -81,12 +83,14 @@ class UserManager:
                     c.execute("UPDATE users SET password_hash = ? WHERE username = ?",
                             (new_hash, username))
                     conn.commit()
-                    logger.info(f"Upgraded password hash for user {username}")
+                    logger.info(f"已升级用户 {username} 的密码哈希到bcrypt格式")
                 except Exception as e:
-                    logger.error(f"Failed to upgrade password hash for user {username}: {e}")
+                    logger.error(f"升级用户 {username} 密码哈希失败: {e}")
+            logger.info(f"用户 {username} 登录成功")
             conn.close()
             return True
         
+        logger.warning(f"登录失败：用户 {username} 密码验证失败")
         conn.close()
         return False
 

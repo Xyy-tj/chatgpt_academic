@@ -127,7 +127,7 @@ def start_app(app_block, CONCURRENT_COUNT, AUTHENTICATION, PORT, SSL_KEYFILE, SS
     app_block.enable_queue = True
     app_block.queue(concurrency_count=CONCURRENT_COUNT)
     app_block.validate_queue_settings()
-    app_block.show_api = False
+    app_block.show_api = True
     app_block.config = app_block.get_config_file()
     max_threads = 40
     app_block.max_threads = max(

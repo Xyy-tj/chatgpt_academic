@@ -92,31 +92,81 @@ function gradioApp() {
 
 
 function setCookie(name, value, days) {
-    var expires = "";
-
-    if (days) {
-        var date = new Date();
-        date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-        expires = "; expires=" + date.toUTCString();
+    try {
+        let expires = "";
+        if (days) {
+            const date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            expires = "; expires=" + date.toUTCString();
+        }
+        // 确保value被正确编码
+        const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+        const encodedValue = encodeURIComponent(stringValue);
+        
+        // 获取当前域名
+        const hostname = window.location.hostname;
+        // 设置domain，如果是localhost则不设置
+        const domain = hostname === 'localhost' ? '' : `; domain=${hostname}`;
+        
+        // 构建cookie字符串，添加更多安全选项
+        const cookieStr = `${name}=${encodedValue}${expires}${domain}; path=/; SameSite=Lax; Secure`;
+        
+        // 在设置之前先看看当前的cookie状态
+        console.log('Current cookies before setting:', document.cookie);
+        console.log('Setting cookie with options:', cookieStr);
+        
+        // 设置cookie
+        document.cookie = cookieStr;
+        
+        // 验证cookie是否被正确设置
+        const verifyValue = getCookie(name);
+        console.log(`Verification - Cookie ${name} value after setting:`, verifyValue);
+        
+        if (verifyValue === null) {
+            console.warn(`Failed to set cookie ${name} - verification returned null`);
+            // 尝试不带Secure标志重新设置（如果不是https环境）
+            if (!window.location.protocol.includes('https')) {
+                const cookieStrNoSecure = `${name}=${encodedValue}${expires}${domain}; path=/; SameSite=Lax`;
+                document.cookie = cookieStrNoSecure;
+                console.log('Retrying without Secure flag:', cookieStrNoSecure);
+            }
+        }
+        
+        return getCookie(name) !== null;
+    } catch(e) {
+        console.error(`Error setting cookie ${name}:`, e);
+        return false;
     }
-
-    document.cookie = name + "=" + value + expires + "; path=/";
 }
 
-
 function getCookie(name) {
-    var decodedCookie = decodeURIComponent(document.cookie);
-    var cookies = decodedCookie.split(';');
-
-    for (var i = 0; i < cookies.length; i++) {
-        var cookie = cookies[i].trim();
-
-        if (cookie.indexOf(name + "=") === 0) {
-            return cookie.substring(name.length + 1, cookie.length);
+    try {
+        const nameEQ = name + "=";
+        const ca = document.cookie.split(';');
+        console.log(`Getting cookie ${name}, all cookies:`, document.cookie);
+        
+        for(let i = 0; i < ca.length; i++) {
+            let c = ca[i];
+            while (c.charAt(0) == ' ') c = c.substring(1, c.length);
+            if (c.indexOf(nameEQ) == 0) {
+                const encodedValue = c.substring(nameEQ.length, c.length);
+                const decodedValue = decodeURIComponent(encodedValue);
+                console.log(`Found cookie ${name} with value:`, decodedValue);
+                try {
+                    // 尝试解析JSON
+                    return JSON.parse(decodedValue);
+                } catch(e) {
+                    // 如果不是JSON格式，直接返回字符串
+                    return decodedValue;
+                }
+            }
         }
+        console.log(`Cookie ${name} not found`);
+        return null;
+    } catch(e) {
+        console.error(`Error getting cookie ${name}:`, e);
+        return null;
     }
-
-    return null;
 }
 
 
@@ -564,7 +614,7 @@ function register_func_paste(input) {
             const clipboardData = e.clipboardData || window.clipboardData;
             const items = clipboardData.items;
             if (items) {
-                for (i = 0; i < items.length; i++) {
+                for (i = 0; i <items.length; i++) {
                     if (items[i].kind === "file") { // 确保是文件类型
                         const file = items[i].getAsFile();
                         // 将每一个粘贴的文件添加到files数组中
@@ -1420,5 +1470,45 @@ async function run_multiplex_shift(multiplex_sel) {
 
 
 async function persistent_cookie_init(web_cookie_cache, cookie) {
+    console.log('=== Starting cookie initialization ===');
+    console.log('Cookie object received:', cookie);  // 添加日志
+    console.log('Current document.cookie:', document.cookie);  // 添加日志
+    console.log('Current hostname:', window.location.hostname);  // 添加日志
+    
+    // If user is logged in, persist cookie for 7 days
+    if (cookie && cookie.user) {
+        // Store all cookie data with 7 days expiration
+        for (const [key, value] of Object.entries(cookie)) {
+            try {
+                const stringValue = JSON.stringify(value);
+                setCookie(key, stringValue, 7);
+                console.log(`Successfully set cookie: ${key} = ${stringValue}`);  // 添加更详细的日志
+            } catch(e) {
+                console.error(`Failed to set cookie ${key}:`, e);  // 添加错误日志
+            }
+        }
+    }
+    
+    // Parse all cookies from document.cookie
+    const cookiesArray = document.cookie.split('; ');
+    cookie = cookie || {};
+    console.log('Current cookies array:', cookiesArray);
+    
+    cookiesArray.forEach(pair => {
+        const eqIndex = pair.indexOf('=');
+        if (eqIndex > -1) {
+            const key = pair.substring(0, eqIndex);
+            const val = pair.substring(eqIndex + 1);
+            try {
+                const decodedVal = decodeURIComponent(val);
+                cookie[key] = JSON.parse(decodedVal);
+                console.log(`Successfully parsed cookie ${key}:`, cookie[key]);
+            } catch(e) {
+                cookie[key] = decodedVal;
+                console.log(`Using raw value for cookie ${key}:`, cookie[key]);
+            }
+        }
+    });
+    
     return [localStorage.getItem('web_cookie_cache'), cookie];
 }

@@ -247,7 +247,7 @@ def predict(inputs:str, llm_kwargs:dict, plugin_kwargs:dict, chatbot:ChatBotWith
 
     user_input = inputs
     # 修改：优先从 chatbot 对象获取用户名，如果不存在则从 cookie 获取，最后才使用 anonymous
-    current_user = getattr(chatbot, 'user', None) or chatbot._cookies.get('user', 'anonymous')
+    current_user = getattr(chatbot, 'user', None) or chatbot._cookies.get('user') or 'anonymous'
     
     # 检查用户额度
     if hasattr(chatbot, '_user_manager'):

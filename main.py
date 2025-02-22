@@ -74,7 +74,6 @@ def main():
     from themes.theme import load_dynamic_theme, to_cookie_str, from_cookie_str, assign_user_uuid
     title_html = f"<h1 align=\"center\">GPT 学术优化 {get_current_version()}</h1>{theme_declaration}"
 
-
     # 一些普通功能模块
     from core_functional import get_core_functions
     functional = get_core_functions()
@@ -94,6 +93,23 @@ def main():
 
     # 做一些外观色彩上的调整
     set_theme = adjust_theme()
+
+    # 添加自定义CSS
+    advanced_css = """
+    #refresh_quota_btn {
+        margin: 0 0 0 5px;
+        min-width: 30px;
+        max-width: 30px;
+        height: 30px;
+        padding: 0;
+        border-radius: 50%;
+        font-size: 14px;
+        line-height: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    """ + advanced_css  # 保留原有的advanced_css内容
 
     # 代理与自动更新
     from check_proxy import check_proxy, auto_update, warm_up_modules
@@ -144,10 +160,13 @@ def main():
 
         # Main interface (initially hidden)
         with gr.Column(visible=False, elem_id="main_interface") as main_interface:
+            # 添加隐藏的刷新按钮，确保它在UI初始化时就创建
+            refresh_button = gr.Button('Refresh', visible=False, elem_id='refresh_button')
             # User info display
             with gr.Row():
-                user_info = gr.Markdown("")
+                user_info = gr.Markdown("", elem_id="user_info")
                 quota_info = gr.Markdown("", elem_id="quota-info")
+                refresh_button = gr.Button("🔄", visible=True, size="sm")
                 logout_btn = gr.Button("登出")  # 移除 scale 参数
             with gr_L1():
                 with gr_L2(scale=2, elem_id="gpt-chat"):
@@ -270,22 +289,40 @@ def main():
             if user_manager.verify_user(username, password):
                 user_info = user_manager.get_user_info(username)
                 info_text = f"用户: {username} | 已用额度: {user_info['quota_used']}/{user_info['quota_limit']}"
+                updated_cookies = dict(cookies.value)  
+                updated_cookies["user"] = username
                 return [
                     gr.update(visible=False),  # login_row
                     gr.update(visible=True),   # main_interface
                     {"username": username},     # user_state
                     info_text,                 # user_info
                     "",                        # login_msg
-                    gr.update(value={"user": username}),  # cookies
+                    updated_cookies            # cookies
                 ]
-            return [
-                gr.update(visible=True),       # login_row
-                gr.update(visible=False),      # main_interface
-                {"username": None},            # user_state
-                "",                           # user_info
-                "用户名或密码错误",            # login_msg
-                gr.update(value={"user": None}),  # cookies
-            ]
+            else:
+                updated_cookies = dict(cookies.value)
+                if "user" in updated_cookies: 
+                    del updated_cookies["user"]
+                return [
+                    gr.update(visible=True),       # login_row
+                    gr.update(visible=False),      # main_interface
+                    {"username": None},            # user_state
+                    "",                           # user_info
+                    "用户名或密码错误",            # login_msg
+                    updated_cookies                # cookies
+                ]
+
+        def refresh_user_info(user_state):
+            """刷新用户信息"""
+            if not user_state or "username" not in user_state or not user_state["username"]:
+                return ""
+            username = user_state["username"]
+            user_info = user_manager.get_user_info(username)
+            logger.info(f"当前用户：{username}, 已用额度：{user_info['quota_used']}/{user_info['quota_limit']}")
+            
+            if user_info:
+                return f"用户: {username} | 已用额度: {user_info['quota_used']}/{user_info['quota_limit']}"
+            return ""
 
         def register(username, password, email, code):
             # 准备默认的返回值列表
@@ -375,6 +412,14 @@ def main():
             inputs=[username, password],
             outputs=[login_row, main_interface, user_state, user_info, login_msg, cookies]  # 增加cookies输出
         )
+
+        # 刷新按钮点击事件
+        refresh_button.click(
+            refresh_user_info,
+            inputs=[user_state],
+            outputs=[user_info]
+        )
+
         # Main interface (initially hidden)
         logout_btn.click(
             lambda: [
@@ -382,7 +427,7 @@ def main():
                 gr.update(visible=False),     # main_interface
                 {"username": None},           # user_state
                 "",                          # user_info
-                cookies.update({"user": "anonymous"}) or cookies  # Clear user from cookies and return cookies
+                cookies.value,                # cookies
             ],
             outputs=[login_row, main_interface, user_state, user_info, cookies]
         )
@@ -446,7 +491,7 @@ def main():
         switchy_bt.click(None, [switchy_bt], None, _js="(switchy_bt)=>on_flex_button_click(switchy_bt)")
         # 随变按钮的回调函数注册
         def route(request: gr.Request, k, *args, **kwargs):
-            if k not in [r"点击这里搜索插件列表", r"请先从插件列表中选择"]:
+            if k not in [r"点击这里输入「关键词」搜索插件", r"请先从插件列表中选择"]:
                 if plugins[k].get("Class", None) is None:
                     assert plugins[k].get("Function", None) is not None
                     yield from ArgsGeneralWrapper(plugins[k]["Function"])(request, *args, **kwargs)
@@ -498,6 +543,36 @@ def main():
             outputs = [web_cookie_cache, cookies, *customize_btns.values(), *predefined_btns.values()], _js="""persistent_cookie_init""")
         app_block.load(None, inputs=[], outputs=None, _js=f"""()=>GptAcademicJavaScriptInit("{DARK_MODE}","{INIT_SYS_PROMPT}","{ADD_WAIFU}","{LAYOUT}","{TTS_TYPE}")""")    # 配置暗色主题或亮色主题
         app_block.load(None, inputs=[], outputs=None, _js="""()=>{REP}""".replace("REP", register_advanced_plugin_init_arr))
+        
+        # 实时刷新左上角用户额度显示的逻辑
+        def refresh_quota(user_state):
+            """刷新用户信息"""
+            if not user_state or "username" not in user_state or not user_state["username"]:
+                return ""
+            username = user_state["username"]
+            user_info = user_manager.get_user_info(username)
+            logger.info(f"当前用户：{username}, 已用额度：{user_info['quota_used']}/{user_info['quota_limit']}")
+            
+            if user_info:
+                return f"用户: {username} | 已用额度: {user_info['quota_used']}/{user_info['quota_limit']}"
+            return ""
+
+        # 添加隐藏的刷新按钮和自动刷新JS脚本，用于定时刷新左上角额度显示
+        refresh_button.click(refresh_quota, inputs=user_state, outputs=user_info)
+        auto_refresh_html = gr.HTML("""<script>
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('开始设置自动刷新...');
+            const refreshInterval = setInterval(function() {
+                const button = document.getElementById('refresh_button');
+                if (button) {
+                    console.log('触发刷新...');
+                    button.click();
+                } else {
+                    console.error('未找到刷新按钮，请检查按钮ID是否正确');
+                }
+            }, 1000);
+        });
+        </script>""")
 
     # Gradio的inbrowser触发不太稳定，回滚代码到原始的浏览器打开函数
     def run_delayed_tasks():

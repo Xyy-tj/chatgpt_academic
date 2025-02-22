@@ -171,8 +171,8 @@ def handle_core_functionality(additional_fn, inputs, history, chatbot, username=
         logger.info(f"当前用户: {username}")
         # Get username from chatbot if not provided
         if username is None and hasattr(chatbot, 'get_cookies'):
-            username = chatbot.get_cookies().get('user', 'anonymous')  # Changed from 'user_name' to 'user' to match login
-            
+            username = chatbot.get_cookies().get('user')
+
         if username:
             from user_manager import UserManager
             user_mgr = UserManager()

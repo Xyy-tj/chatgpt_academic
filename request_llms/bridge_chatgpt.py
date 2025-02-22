@@ -424,6 +424,28 @@ def predict(inputs:str, llm_kwargs:dict, plugin_kwargs:dict, chatbot:ChatBotWith
                     yield from update_ui(chatbot=chatbot, history=history, msg="Json解析异常" + error_msg) # 刷新界面
                     return
         yield from update_ui(chatbot=chatbot, history=history, msg="完成") # 刷新界面
+
+        # 更新用户额度
+        if hasattr(chatbot, '_user_manager') and current_user != 'anonymous':
+            try:
+                # 计算本次对话消耗的tokens
+                response_length = len(gpt_replying_buffer)  # 简单估算，每个字符按1个token计算
+                input_length = len(inputs)
+                total_tokens = response_length + input_length
+                
+                # 更新用户额度
+                user_manager = chatbot._user_manager
+                user_manager.update_quota(current_user, total_tokens, llm_kwargs.get('llm_model', 'unknown'))
+                
+                # 获取更新后的额度信息
+                user_info = user_manager.get_user_info(current_user)
+                if user_info:
+                    remaining_quota = user_info['quota_limit'] - user_info['quota_used']
+                    quota_info = f"本次对话消耗{total_tokens}点额度，当前剩余额度: {remaining_quota}"
+                    yield from update_ui(chatbot=chatbot, history=history, msg=quota_info)
+            except Exception as e:
+                logger.error(f"更新用户额度时发生错误: {str(e)}")
+
         return  # return from stream-branch
 
 def handle_o1_model_special(response, inputs, llm_kwargs, chatbot, history):

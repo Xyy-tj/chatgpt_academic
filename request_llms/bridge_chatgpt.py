@@ -246,9 +246,30 @@ def predict(inputs:str, llm_kwargs:dict, plugin_kwargs:dict, chatbot:ChatBotWith
         return
 
     user_input = inputs
+    # 修改：优先从 chatbot 对象获取用户名，如果不存在则从 cookie 获取，最后才使用 anonymous
+    current_user = getattr(chatbot, 'user', None) or chatbot._cookies.get('user', 'anonymous')
+    
+    # 检查用户额度
+    if hasattr(chatbot, '_user_manager'):
+        user_manager = chatbot._user_manager
+        user_info = user_manager.get_user_info(current_user)
+        if user_info:
+            remaining_quota = user_info['quota_limit'] - user_info['quota_used']
+            if remaining_quota <= 0:
+                chatbot.append((inputs, f"您的对话额度已用完 (已用: {user_info['quota_used']}, 上限: {user_info['quota_limit']})，请联系管理员。"))
+                yield from update_ui(chatbot=chatbot, history=history, msg="额度不足") # 刷新界面
+                return
+            # 显示剩余额度
+            quota_info = f"(剩余额度: {remaining_quota})"
+            yield from update_ui(chatbot=chatbot, history=history, msg=quota_info)
+
     if additional_fn is not None:
         from core_functional import handle_core_functionality
-        inputs, history = handle_core_functionality(additional_fn, inputs, history, chatbot)
+        inputs, history = handle_core_functionality(additional_fn, inputs, history, chatbot, current_user)
+        if isinstance(inputs, str) and inputs.startswith("您的对话额度已用完"):
+            chatbot.append((user_input, inputs))
+            yield from update_ui(chatbot=chatbot, history=history, msg="额度不足")
+            return
 
     # 多模态模型
     has_multimodal_capacity = model_info[llm_kwargs['llm_model']].get('has_multimodal_capacity', False)
@@ -574,4 +595,3 @@ def generate_payload(inputs:str, llm_kwargs:dict, history:list, system_prompt:st
     if openai_force_temperature_one:
         payload.pop('temperature')
     return headers,payload
-

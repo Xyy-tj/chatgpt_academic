@@ -32,10 +32,22 @@ def encode_plugin_info(k, plugin)->str:
         plugin_["Label"] = f"插件[{k}]不需要高级参数。"
     return to_cookie_str(plugin_)
 
+from user_manager import UserManager
+from email_verify import EmailVerification
+
 def main():
     import gradio as gr
     if gr.__version__ not in ['3.32.12']:
         raise ModuleNotFoundError("使用项目内置Gradio获取最优体验! 请运行 `pip install -r requirements.txt` 指令安装内置Gradio及其他依赖, 详情信息见requirements.txt.")
+
+    # Initialize user manager and email verification
+    user_manager = UserManager()
+    email_verify = EmailVerification()
+    
+    # Add default admin user if not exists
+    user_manager.add_user("admin", "admin123", "admin@example.com", quota_limit=float('inf'), is_admin=True)
+    # Add anonymous user if not exists with default quota
+    user_manager.add_user("anonymous", "anonymous", "anonymous@example.com", quota_limit=1000, is_admin=False)
 
     # 一些基础工具
     from toolbox import format_io, find_free_port, on_file_uploaded, on_report_generated, get_conf, ArgsGeneralWrapper, DummyWith
@@ -77,6 +89,9 @@ def main():
     # 处理markdown文本格式的转变
     gr.Chatbot.postprocess = format_io
 
+    # 设置用户管理器
+    gr.Chatbot._user_manager = user_manager
+
     # 做一些外观色彩上的调整
     set_theme = adjust_theme()
 
@@ -96,83 +111,115 @@ def main():
     customize_btns = {}
     predefined_btns = {}
     from shared_utils.cookie_manager import make_cookie_cache, make_history_cache
-    with gr.Blocks(title="GPT 学术优化", theme=set_theme, analytics_enabled=False, css=advanced_css) as app_block:
+    with gr.Blocks(theme=set_theme, analytics_enabled=False, title="GPT 学术优化", css=advanced_css) as app_block:
         gr.HTML(title_html)
         secret_css = gr.Textbox(visible=False, elem_id="secret_css")
         register_advanced_plugin_init_arr = ""
 
         cookies, web_cookie_cache = make_cookie_cache() # 定义 后端state（cookies）、前端（web_cookie_cache）两兄弟
-        with gr_L1():
-            with gr_L2(scale=2, elem_id="gpt-chat"):
-                chatbot = gr.Chatbot(label=f"当前模型：{LLM_MODEL}", elem_id="gpt-chatbot")
-                if LAYOUT == "TOP-DOWN":  chatbot.style(height=CHATBOT_HEIGHT)
-                history, _, _ = make_history_cache() # 定义 后端state（history）、前端（history_cache）、后端setter（history_cache_update）三兄弟
-            with gr_L2(scale=1, elem_id="gpt-panel"):
-                with gr.Accordion("输入区", open=True, elem_id="input-panel") as area_input_primary:
-                    with gr.Row():
-                        txt = gr.Textbox(show_label=False, placeholder="Input question here.", elem_id='user_input_main').style(container=False)
-                    with gr.Row(elem_id="gpt-submit-row"):
-                        multiplex_submit_btn = gr.Button("提交", elem_id="elem_submit_visible", variant="primary")
-                        multiplex_sel = gr.Dropdown(
-                            choices=get_multiplex_button_functions().keys(), value="常规对话",
-                            interactive=True, label='', show_label=False,
-                            elem_classes='normal_mut_select', elem_id="gpt-submit-dropdown").style(container=False)
-                        submit_btn = gr.Button("提交", elem_id="elem_submit", variant="primary", visible=False)
-                    with gr.Row():
-                        resetBtn = gr.Button("重置", elem_id="elem_reset", variant="secondary"); resetBtn.style(size="sm")
-                        stopBtn = gr.Button("停止", elem_id="elem_stop", variant="secondary"); stopBtn.style(size="sm")
-                        clearBtn = gr.Button("清除", elem_id="elem_clear", variant="secondary", visible=False); clearBtn.style(size="sm")
-                    if ENABLE_AUDIO:
-                        with gr.Row():
-                            audio_mic = gr.Audio(source="microphone", type="numpy", elem_id="elem_audio", streaming=True, show_label=False).style(container=False)
-                    with gr.Row():
-                        status = gr.Markdown(f"Tip: 按Enter提交, 按Shift+Enter换行。支持将文件直接粘贴到输入区。", elem_id="state-panel")
+        user_state = gr.State({"username": None})
+        
+        # Login interface
+        with gr.Row(visible=True, elem_id="login_interface") as login_row:
+            with gr.Column(scale=1):
+                username = gr.Textbox(label="用户名", placeholder="请输入用户名")
+                password = gr.Textbox(label="密码", placeholder="请输入密码", type="password")
+                with gr.Row():
+                    login_btn = gr.Button("登录")
+                    register_tab_btn = gr.Button("注册新用户")
+                login_msg = gr.Markdown("")
 
-                with gr.Accordion("基础功能区", open=True, elem_id="basic-panel") as area_basic_fn:
-                    with gr.Row():
-                        for k in range(NUM_CUSTOM_BASIC_BTN):
-                            customize_btn = gr.Button("自定义按钮" + str(k+1), visible=False, variant="secondary", info_str=f'基础功能区: 自定义按钮')
-                            customize_btn.style(size="sm")
-                            customize_btns.update({"自定义按钮" + str(k+1): customize_btn})
-                        for k in functional:
-                            if ("Visible" in functional[k]) and (not functional[k]["Visible"]): continue
-                            variant = functional[k]["Color"] if "Color" in functional[k] else "secondary"
-                            functional[k]["Button"] = gr.Button(k, variant=variant, info_str=f'基础功能区: {k}')
-                            functional[k]["Button"].style(size="sm")
-                            predefined_btns.update({k: functional[k]["Button"]})
-                with gr.Accordion("函数插件区", open=True, elem_id="plugin-panel") as area_crazy_fn:
-                    with gr.Row():
-                        gr.Markdown("<small>插件可读取“输入区”文本/路径作为参数（上传文件自动修正路径）</small>")
-                    with gr.Row(elem_id="input-plugin-group"):
-                        plugin_group_sel = gr.Dropdown(choices=all_plugin_groups, label='', show_label=False, value=DEFAULT_FN_GROUPS,
-                                                      multiselect=True, interactive=True, elem_classes='normal_mut_select').style(container=False)
-                    with gr.Row():
-                        for index, (k, plugin) in enumerate(plugins.items()):
-                            if not plugin.get("AsButton", True): continue
-                            visible = True if match_group(plugin['Group'], DEFAULT_FN_GROUPS) else False
-                            variant = plugins[k]["Color"] if "Color" in plugin else "secondary"
-                            info = plugins[k].get("Info", k)
-                            btn_elem_id = f"plugin_btn_{index}"
-                            plugin['Button'] = plugins[k]['Button'] = gr.Button(k, variant=variant,
-                                visible=visible, info_str=f'函数插件区: {info}', elem_id=btn_elem_id).style(size="sm")
-                            plugin['ButtonElemId'] = btn_elem_id
-                    with gr.Row():
-                        with gr.Accordion("更多函数插件", open=True):
-                            dropdown_fn_list = []
-                            for k, plugin in plugins.items():
-                                if not match_group(plugin['Group'], DEFAULT_FN_GROUPS): continue
-                                if not plugin.get("AsButton", True): dropdown_fn_list.append(k)     # 排除已经是按钮的插件
-                                elif plugin.get('AdvancedArgs', False): dropdown_fn_list.append(k)  # 对于需要高级参数的插件，亦在下拉菜单中显示
+        # Register interface
+        with gr.Row(visible=False, elem_id="register_interface") as register_row:
+            with gr.Column(scale=1):
+                reg_username = gr.Textbox(label="用户名", placeholder="请输入用户名")
+                reg_password = gr.Textbox(label="密码", placeholder="请输入密码", type="password")
+                reg_email = gr.Textbox(label="邮箱", placeholder="请输入邮箱")
+                reg_code = gr.Textbox(label="验证码", placeholder="请输入验证码")
+                with gr.Row():
+                    get_code_btn = gr.Button("获取验证码")
+                    register_btn = gr.Button("注册")
+                    back_to_login_btn = gr.Button("返回登录")
+                register_msg = gr.Markdown("")
+
+        # Main interface (initially hidden)
+        with gr.Column(visible=False, elem_id="main_interface") as main_interface:
+            # User info display
+            with gr.Row():
+                user_info = gr.Markdown("")
+                quota_info = gr.Markdown("", elem_id="quota-info")
+                logout_btn = gr.Button("登出")  # 移除 scale 参数
+            with gr_L1():
+                with gr_L2(scale=2, elem_id="gpt-chat"):
+                    chatbot = gr.Chatbot(label=f"当前模型：{LLM_MODEL}", elem_id="gpt-chatbot")
+                    if LAYOUT == "TOP-DOWN":  chatbot.style(height=CHATBOT_HEIGHT)
+                    history, _, _ = make_history_cache() # 定义 后端state（history）、前端（history_cache）、后端setter（history_cache_update）三兄弟
+                with gr_L2(scale=1, elem_id="gpt-panel"):
+                    with gr.Accordion("输入区", open=True, elem_id="input-panel") as area_input_primary:
+                        with gr.Row():
+                            txt = gr.Textbox(show_label=False, placeholder="Input question here.", elem_id='user_input_main').style(container=False)
+                        with gr.Row(elem_id="gpt-submit-row"):
+                            multiplex_submit_btn = gr.Button("提交", elem_id="elem_submit_visible", variant="primary")
+                            multiplex_sel = gr.Dropdown(
+                                choices=get_multiplex_button_functions().keys(), value="常规对话",
+                                interactive=True, label='', show_label=False,
+                                elem_classes='normal_mut_select', elem_id="gpt-submit-dropdown").style(container=False)
+                            submit_btn = gr.Button("提交", elem_id="elem_submit", variant="primary", visible=False)
+                        with gr.Row():
+                            resetBtn = gr.Button("重置", elem_id="elem_reset", variant="secondary"); resetBtn.style(size="sm")
+                            stopBtn = gr.Button("停止", elem_id="elem_stop", variant="secondary"); stopBtn.style(size="sm")
+                            clearBtn = gr.Button("清除", elem_id="elem_clear", variant="secondary", visible=False); clearBtn.style(size="sm")
+                        if ENABLE_AUDIO:
                             with gr.Row():
-                                dropdown = gr.Dropdown(dropdown_fn_list, value=r"点击这里输入「关键词」搜索插件", label="", show_label=False).style(container=False)
-                            with gr.Row():
-                                plugin_advanced_arg = gr.Textbox(show_label=True, label="高级参数输入区", visible=False, elem_id="advance_arg_input_legacy",
-                                                                 placeholder="这里是特殊函数插件的高级参数输入区").style(container=False)
-                            with gr.Row():
-                                switchy_bt = gr.Button(r"请先从插件列表中选择", variant="secondary", elem_id="elem_switchy_bt").style(size="sm")
-                    with gr.Row():
-                        with gr.Accordion("点击展开“文件下载区”。", open=False) as area_file_up:
-                            file_upload = gr.Files(label="任何文件, 推荐上传压缩文件(zip, tar)", file_count="multiple", elem_id="elem_upload")
+                                audio_mic = gr.Audio(source="microphone", type="numpy", elem_id="elem_audio", streaming=True, show_label=False).style(container=False)
+                        with gr.Row():
+                            status = gr.Markdown(f"Tip: 按Enter提交, 按Shift+Enter换行。支持将文件直接粘贴到输入区。", elem_id="state-panel")
+
+                    with gr.Accordion("基础功能区", open=True, elem_id="basic-panel") as area_basic_fn:
+                        with gr.Row():
+                            for k in range(NUM_CUSTOM_BASIC_BTN):
+                                customize_btn = gr.Button("自定义按钮" + str(k+1), visible=False, variant="secondary", info_str=f'基础功能区: 自定义按钮')
+                                customize_btn.style(size="sm")
+                                customize_btns.update({"自定义按钮" + str(k+1): customize_btn})
+                            for k in functional:
+                                if ("Visible" in functional[k]) and (not functional[k]["Visible"]): continue
+                                variant = functional[k]["Color"] if "Color" in functional[k] else "secondary"
+                                functional[k]["Button"] = gr.Button(k, variant=variant, info_str=f'基础功能区: {k}')
+                                functional[k]["Button"].style(size="sm")
+                                predefined_btns.update({k: functional[k]["Button"]})
+                    with gr.Accordion("函数插件区", open=True, elem_id="plugin-panel") as area_crazy_fn:
+                        with gr.Row():
+                            gr.Markdown("<small>插件可读取“输入区”文本/路径作为参数（上传文件自动修正路径）</small>")
+                        with gr.Row(elem_id="input-plugin-group"):
+                            plugin_group_sel = gr.Dropdown(choices=all_plugin_groups, label='', show_label=False, value=DEFAULT_FN_GROUPS,
+                                                          multiselect=True, interactive=True, elem_classes='normal_mut_select').style(container=False)
+                        with gr.Row():
+                            for index, (k, plugin) in enumerate(plugins.items()):
+                                if not plugin.get("AsButton", True): continue
+                                visible = True if match_group(plugin['Group'], DEFAULT_FN_GROUPS) else False
+                                variant = plugins[k]["Color"] if "Color" in plugin else "secondary"
+                                info = plugins[k].get("Info", k)
+                                btn_elem_id = f"plugin_btn_{index}"
+                                plugin['Button'] = plugins[k]['Button'] = gr.Button(k, variant=variant,
+                                    visible=visible, info_str=f'函数插件区: {info}', elem_id=btn_elem_id).style(size="sm")
+                                plugin['ButtonElemId'] = btn_elem_id
+                        with gr.Row():
+                            with gr.Accordion("更多函数插件", open=True):
+                                dropdown_fn_list = []
+                                for k, plugin in plugins.items():
+                                    if not match_group(plugin['Group'], DEFAULT_FN_GROUPS): continue
+                                    if not plugin.get("AsButton", True): dropdown_fn_list.append(k)     # 排除已经是按钮的插件
+                                    elif plugin.get('AdvancedArgs', False): dropdown_fn_list.append(k)  # 对于需要高级参数的插件，亦在下拉菜单中显示
+                                with gr.Row():
+                                    dropdown = gr.Dropdown(dropdown_fn_list, value=r"点击这里输入「关键词」搜索插件", label="", show_label=False).style(container=False)
+                                with gr.Row():
+                                    plugin_advanced_arg = gr.Textbox(show_label=True, label="高级参数输入区", visible=False, elem_id="advance_arg_input_legacy",
+                                                                     placeholder="这里是特殊函数插件的高级参数输入区").style(container=False)
+                                with gr.Row():
+                                    switchy_bt = gr.Button(r"请先从插件列表中选择", variant="secondary", elem_id="elem_switchy_bt").style(size="sm")
+                        with gr.Row():
+                            with gr.Accordion("点击展开“文件下载区”。", open=False) as area_file_up:
+                                file_upload = gr.Files(label="任何文件, 推荐上传压缩文件(zip, tar)", file_count="multiple", elem_id="elem_upload")
 
 
         # 左上角工具栏定义
@@ -218,6 +265,127 @@ def main():
         output_combo = [cookies, chatbot, history, status]
         predict_args = dict(fn=ArgsGeneralWrapper(predict), inputs=[*input_combo, gr.State(True)], outputs=output_combo)
 
+        # Login/Register logic
+        def login(username, password):
+            if user_manager.verify_user(username, password):
+                user_info = user_manager.get_user_info(username)
+                info_text = f"用户: {username} | 已用额度: {user_info['quota_used']}/{user_info['quota_limit']}"
+                return [
+                    gr.update(visible=False),  # login_row
+                    gr.update(visible=True),   # main_interface
+                    {"username": username},     # user_state
+                    info_text,                 # user_info
+                    "",                        # login_msg
+                    gr.update(value={"user": username}),  # cookies
+                ]
+            return [
+                gr.update(visible=True),       # login_row
+                gr.update(visible=False),      # main_interface
+                {"username": None},            # user_state
+                "",                           # user_info
+                "用户名或密码错误",            # login_msg
+                gr.update(value={"user": None}),  # cookies
+            ]
+
+        def register(username, password, email, code):
+            # 准备默认的返回值列表
+            outputs = [
+                gr.update(),  # register_msg
+                gr.update(),  # register_row
+                gr.update(),  # login_row
+                gr.update()   # login_msg
+            ]
+            
+            if not all([username, password, email, code]):
+                outputs[0] = gr.update(value="请填写所有信息")
+                return outputs
+            
+            if not email_verify.is_valid_email(email):
+                outputs[0] = gr.update(value="请输入有效的邮箱地址")
+                return outputs
+            
+            # 验证验证码
+            success, message = email_verify.verify_code(email, code)
+            if not success:
+                outputs[0] = gr.update(value=message)
+                return outputs
+            
+            # 检查用户名和邮箱是否已存在
+            if user_manager.get_user_by_email(email):
+                outputs[0] = gr.update(value="该邮箱已被注册")
+                return outputs
+            
+            # 添加用户
+            if user_manager.add_user(username, password, email):
+                # 注册成功，切换到登录界面
+                return [
+                    gr.update(value=""),                # register_msg
+                    gr.update(visible=False),           # register_row
+                    gr.update(visible=True),            # login_row
+                    gr.update(value="注册成功，请登录")  # login_msg
+                ]
+            
+            outputs[0] = gr.update(value="用户名已存在")
+            return outputs
+
+        def show_register():
+            return [
+                gr.update(visible=False),  # login_row
+                gr.update(visible=True),   # register_row
+            ]
+
+        def show_login():
+            return [
+                gr.update(visible=False),  # register_row
+                gr.update(visible=True),   # login_row
+            ]
+
+        def send_verification_code(email):
+            if not email_verify.is_valid_email(email):
+                return "请输入有效的邮箱地址"
+            
+            success, message = email_verify.send_code(email)
+            return message
+
+        # Connect UI elements
+        get_code_btn.click(
+            send_verification_code,
+            inputs=[reg_email],
+            outputs=[register_msg]
+        )
+        
+        register_tab_btn.click(
+            show_register,
+            outputs=[login_row, register_row]
+        )
+        
+        back_to_login_btn.click(
+            show_login,
+            outputs=[register_row, login_row]
+        )
+        
+        register_btn.click(
+            register,
+            inputs=[reg_username, reg_password, reg_email, reg_code],
+            outputs=[register_msg, register_row, login_row, login_msg]  # 修正输出组件顺序
+        )
+        
+        login_btn.click(
+            login,
+            inputs=[username, password],
+            outputs=[login_row, main_interface, user_state, user_info, login_msg, cookies]  # 增加cookies输出
+        )
+        # Main interface (initially hidden)
+        logout_btn.click(
+            lambda: [
+                gr.update(visible=True),      # login_row
+                gr.update(visible=False),     # main_interface
+                {"username": None},           # user_state
+                "",                          # user_info
+                cookies.update({"user": "anonymous"}) or cookies  # Clear user from cookies and return cookies
+            ],
+            outputs=[login_row, main_interface, user_state, user_info, cookies]
+        )
         # 提交按钮、重置按钮
         multiplex_submit_btn.click(
             None, [multiplex_sel], None, _js="""(multiplex_sel)=>multiplex_function_begin(multiplex_sel)""")

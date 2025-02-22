@@ -34,7 +34,6 @@ arxiv
 numpy
 rich
 
-
 llama-index-core==0.10.68
 llama-index-legacy==0.9.48
 llama-index-readers-file==0.1.33
@@ -44,3 +43,5 @@ llama-index-embeddings-openai==0.1.10
 llama-parse==0.4.9
 mdit-py-plugins>=0.3.3
 linkify-it-py==2.0.3
+
+# Email dependencies are built into Python, no additional packages needed

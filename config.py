@@ -13,30 +13,30 @@ API_KEY = "在此处填写APIKEY"    # 可同时填写多个API-KEY，用英文�
 # [step 1-2]>> ( 接入通义 qwen-max ) 接入通义千问在线大模型，api-key获取地址 https://dashscope.console.aliyun.com/
 DASHSCOPE_API_KEY = "" # 阿里灵积云API_KEY
 
+# 邮件服务器配置
+SMTP_SERVER = "smtpdm.aliyun.com"      # SMTP服务器地址
+SMTP_PORT = 80                         # SMTP服务器端口
+SMTP_USER = "zyfan@zyfan.zone"        # SMTP用户名称
+SMTP_PASSWORD = "HUpo756629563"                     # SMTP用户密码
+SMTP_FROM_EMAIL = "zyfan@zyfan.zone"  # 发件人邮箱（通常与SMTP_USER相同）
+
 # [step 1-3]>> ( 接入 deepseek-reasoner, 即 deepseek-r1 ) 深度求索(DeepSeek) API KEY，默认请求地址为"https://api.deepseek.com/v1/chat/completions"
 DEEPSEEK_API_KEY = ""
 
 # [step 2]>> 改为True应用代理。如果使用本地或无地域限制的大模型时，此处不修改；如果直接在海外服务器部署，此处不修改
-USE_PROXY = False
+USE_PROXY = True
 if USE_PROXY:
-    """
-    代理网络的地址，打开你的代理软件查看代理协议(socks5h / http)、地址(localhost)和端口(11284)
-    填写格式是 [协议]://  [地址] :[端口]，填写之前不要忘记把USE_PROXY改成True，如果直接在海外服务器部署，此处不修改
-            <配置教程&视频教程> https://github.com/binary-husky/gpt_academic/issues/1>
-    [协议] 常见协议无非socks5h/http; 例如 v2**y 和 ss* 的默认本地协议是socks5h; 而cl**h 的默认本地协议是http
-    [地址] 填localhost或者127.0.0.1（localhost意思是代理软件安装在本机上）
-    [端口] 在代理软件的设置里找。虽然不同的代理软件界面不一样，但端口号都应该在最显眼的位置上
-    """
+    # 填写格式是 [协议]://[地址]:[端口]
+    # 例如: "socks5h://localhost:11284" 或 "http://127.0.0.1:7890"
     proxies = {
-        #          [协议]://  [地址]  :[端口]
-        "http":  "socks5h://localhost:11284",  # 再例如  "http":  "http://127.0.0.1:7890",
-        "https": "socks5h://localhost:11284",  # 再例如  "https": "http://127.0.0.1:7890",
+        "http": "http://127.0.0.1:7890",    # 请根据你的实际代理端口修改
+        "https": "http://127.0.0.1:7890",   # 请根据你的实际代理端口修改
     }
 else:
     proxies = None
 
 # [step 3]>> 模型选择是 (注意: LLM_MODEL是默认选中的模型, 它*必须*被包含在AVAIL_LLM_MODELS列表中 )
-LLM_MODEL = "gpt-3.5-turbo-16k" # 可选 ↓↓↓
+LLM_MODEL = "gpt-4o-mini" # 可选 ↓↓↓
 AVAIL_LLM_MODELS = ["qwen-max", "o1-mini", "o1-mini-2024-09-12", "o1", "o1-2024-12-17", "o1-preview", "o1-preview-2024-09-12",
                     "gpt-4-1106-preview", "gpt-4-turbo-preview", "gpt-4-vision-preview",
                     "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4-turbo-2024-04-09",

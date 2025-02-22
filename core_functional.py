@@ -6,6 +6,14 @@ from toolbox import clear_line_break
 from toolbox import apply_gpt_academic_string_mask_langbased
 from toolbox import build_gpt_academic_masked_string_langbased
 from textwrap import dedent
+from loguru import logger
+
+
+# Configure logging
+logger.remove()  # Remove all existing handlers
+logger.add("core_functional.log", encoding="utf-8")
+logger.add(lambda msg: print(msg, end=""), colorize=True, format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>")
+
 
 def get_core_functions():
     return {
@@ -147,28 +155,84 @@ def get_core_functions():
     }
 
 
-def handle_core_functionality(additional_fn, inputs, history, chatbot):
-    import core_functional
-    importlib.reload(core_functional)    # 热更新prompt
-    core_functional = core_functional.get_core_functions()
-    addition = chatbot._cookies['customize_fn_overwrite']
-    if additional_fn in addition:
-        # 自定义功能
-        inputs = addition[additional_fn]["Prefix"] + inputs + addition[additional_fn]["Suffix"]
-        return inputs, history
-    else:
+def handle_core_functionality(additional_fn, inputs, history, chatbot, username=None):
+    """处理核心功能
+    Args:
+        additional_fn: 功能名称
+        inputs: 用户输入
+        history: 对话历史
+        chatbot: 对话机器人
+        username: 用户名，用于额度扣减
+    Returns:
+        tuple: (处理后的输入, 更新后的历史记录)
+    """
+    try:
+        logger.info(f"正在处理核心功能: {additional_fn}")
+        logger.info(f"当前用户: {username}")
+        # Get username from chatbot if not provided
+        if username is None and hasattr(chatbot, 'get_cookies'):
+            username = chatbot.get_cookies().get('user', 'anonymous')  # Changed from 'user_name' to 'user' to match login
+            
+        if username:
+            from user_manager import UserManager
+            user_mgr = UserManager()
+            # 检查用户额度
+            user_info = user_mgr.get_user_info(username)
+            if not user_info or user_info['quota_used'] >= user_info['quota_limit']:
+                error_msg = f"您的对话额度已用完 (已用: {user_info['quota_used'] if user_info else 0}, 上限: {user_info['quota_limit'] if user_info else 0})，请联系管理员。"
+                logger.warning(f"用户 {username} 额度不足，无法执行操作 {additional_fn}")
+                chatbot.append((inputs, error_msg))
+                return error_msg, history  # Return error message instead of None
+            
+            # 扣减用户额度
+            deduction_success = user_mgr.deduct_conversation(username)
+            if not deduction_success:
+                error_msg = "额度扣减失败，请联系管理员。"
+                logger.error(f"扣减用户 {username} 额度失败")
+                chatbot.append((inputs, error_msg))
+                return error_msg, history  # Return error message instead of None
+            logger.info(f"已成功扣减用户 {username} 的对话额度")
+        
+        # Get core functions
+        core_functions = get_core_functions()
+        if additional_fn not in core_functions:
+            error_msg = f"未找到功能: {additional_fn}"
+            logger.error(error_msg)
+            chatbot.append((inputs, error_msg))
+            return error_msg, history
+
+        # 动态导入
+        if "Prefix" not in core_functions[additional_fn]:
+            module_name, fn_name = core_functions[additional_fn]["Function"].split('.')
+            module = importlib.import_module(module_name)
+            core_functions[additional_fn]["Prefix"] = getattr(module, fn_name)()["Prefix"]
+            core_functions[additional_fn]["Suffix"] = getattr(module, fn_name)()["Suffix"]
+            logger.debug(f"已动态导入函数 {fn_name} (来自模块 {module_name})")
+        
         # 预制功能
-        if "PreProcess" in core_functional[additional_fn]:
-            if core_functional[additional_fn]["PreProcess"] is not None:
-                inputs = core_functional[additional_fn]["PreProcess"](inputs)  # 获取预处理函数（如果有的话）
-        # 为字符串加上上面定义的前缀和后缀。
-        inputs = apply_gpt_academic_string_mask_langbased(
-            string = core_functional[additional_fn]["Prefix"] + inputs + core_functional[additional_fn]["Suffix"],
+        if "PreProcess" in core_functions[additional_fn]:
+            if core_functions[additional_fn]["PreProcess"] is not None:
+                inputs = core_functions[additional_fn]["PreProcess"](inputs)
+                logger.debug(f"已应用 {additional_fn} 的预处理")
+        
+        # 为字符串加上上面定义的前缀和后缀
+        processed_input = apply_gpt_academic_string_mask_langbased(
+            string = core_functions[additional_fn]["Prefix"] + inputs + core_functions[additional_fn]["Suffix"],
             lang_reference = inputs,
         )
-        if core_functional[additional_fn].get("AutoClearHistory", False):
+        
+        if core_functions[additional_fn].get("AutoClearHistory", False):
             history = []
-        return inputs, history
+            logger.debug(f"已清除 {additional_fn} 的历史记录")
+        
+        return processed_input, history
+        
+    except Exception as e:
+        error_msg = f"处理过程中发生错误: {str(e)}"
+        logger.error(f"处理核心功能时发生错误: {str(e)}")
+        chatbot.append((inputs, error_msg))
+        return error_msg, history
+
 
 if __name__ == "__main__":
     t = get_core_functions()["总结绘制脑图"]
